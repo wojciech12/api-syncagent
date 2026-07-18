@@ -127,13 +127,29 @@ install-boilerplate:
 .PHONY: install-envtest
 install-envtest: install-kube-apiserver install-etcd install-kubectl
 
+# dl.k8s.io does not publish a kube-apiserver binary for darwin, so on macOS we fetch it from the
+# controller-tools envtest release bundle instead (which ships darwin/{amd64,arm64}). This lets the
+# e2e suite run natively on macOS. The bundle version may lag dl.k8s.io by a patch release; the
+# envtest "service cluster" does not need to match any particular Kubernetes version, so the nearest
+# available patch is fine. Only kube-apiserver needs this treatment — etcd and kubectl publish
+# darwin builds directly.
+ENVTEST_KUBE_VERSION_DARWIN ?= v1.34.1
+
 .PHONY: install-kube-apiserver
 install-kube-apiserver:
+ifeq ($(GOOS),darwin)
+	@hack/uget.sh https://github.com/kubernetes-sigs/controller-tools/releases/download/envtest-{VERSION}/envtest-{VERSION}-{GOOS}-{GOARCH}.tar.gz kube-apiserver $(ENVTEST_KUBE_VERSION_DARWIN) controller-tools/envtest/kube-apiserver
+else
 	@UNCOMPRESSED=true hack/uget.sh https://dl.k8s.io/release/{VERSION}/bin/{GOOS}/{GOARCH}/kube-apiserver kube-apiserver $(ENVTEST_KUBE_VERSION) kube-apiserver
+endif
 
 .PHONY: install-etcd
 install-etcd:
+ifeq ($(GOOS),darwin)
+	@hack/uget.sh https://github.com/kubernetes-sigs/controller-tools/releases/download/envtest-{VERSION}/envtest-{VERSION}-{GOOS}-{GOARCH}.tar.gz etcd $(ENVTEST_KUBE_VERSION_DARWIN) controller-tools/envtest/etcd
+else
 	@hack/uget.sh https://github.com/etcd-io/etcd/releases/download/v{VERSION}/etcd-v{VERSION}-{GOOS}-{GOARCH}.tar.gz etcd $(ENVTEST_ETCD_VERSION)
+endif
 
 .PHONY: envtest-env
 envtest-env: export UGET_PRINT_PATH=absolute

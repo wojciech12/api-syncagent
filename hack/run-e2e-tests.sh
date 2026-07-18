@@ -22,7 +22,10 @@ source hack/lib.sh
 
 # get kube envtest binaries
 echodate "Setting up Kube binaries…"
-source <(make --no-print-directory envtest-env)
+# Use eval "$(...)" rather than source <(...): with the GNU Make 3.81 shipped on macOS, the
+# process-substitution form breaks the pipe under `set -o pipefail`, silently dropping the
+# TEST_ASSET_* exports (envtest then falls back to /usr/local/kubebuilder/bin and fails).
+eval "$(make --no-print-directory envtest-env)"
 
 export ARTIFACTS=.e2e
 
@@ -50,7 +53,7 @@ stop_kcp() {
   wait $KCP_PID
 }
 
-if [[ -v KEEP_KCP ]] && $KEEP_KCP; then
+if [[ "${KEEP_KCP:-false}" == "true" ]]; then
   echodate "\$KEEP_KCP is set, will not stop kcp once the script is finished."
 else
   append_trap stop_kcp EXIT
