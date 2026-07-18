@@ -158,3 +158,48 @@ func (k objectKey) Annotations() labels.Set {
 
 	return s
 }
+
+// relatedCopyLabels builds the provenance labels put on a destination copy of a related resource.
+// They tie the copy to its owning primary object and the related resource identifier so that all
+// copies of a given (primary, identifier) can be enumerated via relatedCopySelector. Names and
+// namespaces are hashed because they can exceed the label value limit or contain invalid
+// characters; the identifier is validated to be alphanumeric by the API, so it is used verbatim.
+// The agent name (when set) is included so that each agent only ever prunes its own copies.
+func relatedCopyLabels(primary ctrlruntimeclient.Object, identifier, agentName string) map[string]string {
+	set := map[string]string{
+		relatedPrimaryNameHashLabel: crypto.Hash(primary.GetName()),
+		relatedIdentifierLabel:      identifier,
+	}
+
+	if namespace := primary.GetNamespace(); namespace != "" {
+		set[relatedPrimaryNamespaceHashLabel] = crypto.Hash(namespace)
+	}
+
+	if agentName != "" {
+		set[agentNameLabel] = agentName
+	}
+
+	return set
+}
+
+// relatedCopyAnnotations builds the human-facing provenance annotations (plaintext primary
+// namespace/name) for a destination copy of a related resource.
+func relatedCopyAnnotations(primary ctrlruntimeclient.Object) map[string]string {
+	set := map[string]string{
+		relatedPrimaryNameAnnotation: primary.GetName(),
+	}
+
+	if namespace := primary.GetNamespace(); namespace != "" {
+		set[relatedPrimaryNamespaceAnnotation] = namespace
+	}
+
+	return set
+}
+
+// relatedCopySelector returns a label selector matching exactly the destination copies created for
+// the given primary object and related resource identifier (scoped to the agent when set). Because
+// it mirrors relatedCopyLabels, only objects the agent itself labelled are ever selected, so
+// hand-created objects are never in scope for pruning.
+func relatedCopySelector(primary ctrlruntimeclient.Object, identifier, agentName string) labels.Selector {
+	return labels.SelectorFromSet(relatedCopyLabels(primary, identifier, agentName))
+}

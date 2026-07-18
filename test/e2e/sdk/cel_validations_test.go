@@ -209,6 +209,61 @@ func TestValidateRelatedResourceSpec(t *testing.T) {
 				SyncStatus: true,
 			},
 		},
+		{
+			name:  "cleanupPolicy MatchOrigin with origin service requires watch",
+			valid: false,
+			spec: syncagentv1alpha1.RelatedResourceSpec{
+				Origin:        syncagentv1alpha1.RelatedResourceOriginService,
+				Resource:      "things",
+				Version:       "v1",
+				CleanupPolicy: syncagentv1alpha1.RelatedResourceCleanupPolicyMatchOrigin,
+			},
+		},
+		{
+			name:  "cleanupPolicy MatchOrigin with origin service and watch is valid",
+			valid: true,
+			spec: syncagentv1alpha1.RelatedResourceSpec{
+				Origin:        syncagentv1alpha1.RelatedResourceOriginService,
+				Resource:      "things",
+				Version:       "v1",
+				CleanupPolicy: syncagentv1alpha1.RelatedResourceCleanupPolicyMatchOrigin,
+				Watch: &syncagentv1alpha1.RelatedResourceWatch{
+					ByOwner: &syncagentv1alpha1.RelatedResourceWatchByOwner{},
+				},
+			},
+		},
+		{
+			name:  "cleanupPolicy MatchOrigin with origin kcp does not require watch",
+			valid: true,
+			spec: syncagentv1alpha1.RelatedResourceSpec{
+				Origin:        syncagentv1alpha1.RelatedResourceOriginKcp,
+				Resource:      "things",
+				Version:       "v1",
+				CleanupPolicy: syncagentv1alpha1.RelatedResourceCleanupPolicyMatchOrigin,
+			},
+		},
+		{
+			name:  "cleanup true conflicts with cleanupPolicy Orphan",
+			valid: false,
+			spec: syncagentv1alpha1.RelatedResourceSpec{
+				Origin:        syncagentv1alpha1.RelatedResourceOriginService,
+				Resource:      "things",
+				Version:       "v1",
+				Cleanup:       true,
+				CleanupPolicy: syncagentv1alpha1.RelatedResourceCleanupPolicyOrphan,
+			},
+		},
+		{
+			name:  "cleanup true with cleanupPolicy OnPrimaryDeletion is valid",
+			valid: true,
+			spec: syncagentv1alpha1.RelatedResourceSpec{
+				Origin:        syncagentv1alpha1.RelatedResourceOriginService,
+				Resource:      "things",
+				Version:       "v1",
+				Cleanup:       true,
+				CleanupPolicy: syncagentv1alpha1.RelatedResourceCleanupPolicyOnPrimaryDeletion,
+			},
+		},
 	}
 
 	alphaNum := regexp.MustCompile(`[^a-z0-9]`)

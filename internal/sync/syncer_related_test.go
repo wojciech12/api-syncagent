@@ -24,7 +24,113 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 )
+
+func TestEffectiveCleanupPolicy(t *testing.T) {
+	testcases := []struct {
+		name     string
+		cleanup  bool
+		policy   syncagentv1alpha1.RelatedResourceCleanupPolicy
+		expected syncagentv1alpha1.RelatedResourceCleanupPolicy
+	}{
+		{
+			name:     "no cleanup, no policy defaults to Orphan",
+			expected: syncagentv1alpha1.RelatedResourceCleanupPolicyOrphan,
+		},
+		{
+			name:     "legacy cleanup:true maps to OnPrimaryDeletion",
+			cleanup:  true,
+			expected: syncagentv1alpha1.RelatedResourceCleanupPolicyOnPrimaryDeletion,
+		},
+		{
+			name:     "explicit Orphan wins over cleanup:false",
+			policy:   syncagentv1alpha1.RelatedResourceCleanupPolicyOrphan,
+			expected: syncagentv1alpha1.RelatedResourceCleanupPolicyOrphan,
+		},
+		{
+			name:     "explicit policy wins over legacy cleanup:true",
+			cleanup:  true,
+			policy:   syncagentv1alpha1.RelatedResourceCleanupPolicyMatchOrigin,
+			expected: syncagentv1alpha1.RelatedResourceCleanupPolicyMatchOrigin,
+		},
+		{
+			name:     "explicit OnPrimaryDeletion without cleanup",
+			policy:   syncagentv1alpha1.RelatedResourceCleanupPolicyOnPrimaryDeletion,
+			expected: syncagentv1alpha1.RelatedResourceCleanupPolicyOnPrimaryDeletion,
+		},
+		{
+			name:     "explicit MatchOrigin without cleanup",
+			policy:   syncagentv1alpha1.RelatedResourceCleanupPolicyMatchOrigin,
+			expected: syncagentv1alpha1.RelatedResourceCleanupPolicyMatchOrigin,
+		},
+	}
+
+	for _, tc := range testcases {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := &syncagentv1alpha1.RelatedResourceSpec{
+				Cleanup:       tc.cleanup,
+				CleanupPolicy: tc.policy,
+			}
+
+			if got := spec.EffectiveCleanupPolicy(); got != tc.expected {
+				t.Errorf("expected %q, got %q", tc.expected, got)
+			}
+		})
+	}
+}
+
+func TestRelatedCopyLabelsSelectorRoundTrip(t *testing.T) {
+	primary := &unstructured.Unstructured{}
+	primary.SetName("my-primary")
+	primary.SetNamespace("some-namespace")
+
+	const (
+		identifier = "credentials"
+		agentName  = "agent-1"
+	)
+
+	labelSet := relatedCopyLabels(primary, identifier, agentName)
+
+	// the labels produced for a copy must match the selector used to find them again.
+	selector := relatedCopySelector(primary, identifier, agentName)
+	if !selector.Matches(labels.Set(labelSet)) {
+		t.Errorf("selector %q does not match its own labels %v", selector, labelSet)
+	}
+
+	// a selector for a different identifier must not match.
+	otherIdentifier := relatedCopySelector(primary, "other", agentName)
+	if otherIdentifier.Matches(labels.Set(labelSet)) {
+		t.Errorf("selector for a different identifier unexpectedly matched labels %v", labelSet)
+	}
+
+	// a selector for a different agent must not match.
+	otherAgent := relatedCopySelector(primary, identifier, "agent-2")
+	if otherAgent.Matches(labels.Set(labelSet)) {
+		t.Errorf("selector for a different agent unexpectedly matched labels %v", labelSet)
+	}
+
+	// a selector for a different primary object must not match.
+	otherPrimary := &unstructured.Unstructured{}
+	otherPrimary.SetName("other-primary")
+	otherPrimary.SetNamespace("some-namespace")
+	if relatedCopySelector(otherPrimary, identifier, agentName).Matches(labels.Set(labelSet)) {
+		t.Errorf("selector for a different primary unexpectedly matched labels %v", labelSet)
+	}
+
+	// a cluster-scoped primary (no namespace) must omit the namespace-hash label and still
+	// round-trip.
+	clusterPrimary := &unstructured.Unstructured{}
+	clusterPrimary.SetName("cluster-primary")
+	clusterLabels := relatedCopyLabels(clusterPrimary, identifier, agentName)
+	if _, ok := clusterLabels[relatedPrimaryNamespaceHashLabel]; ok {
+		t.Error("expected no namespace-hash label for a cluster-scoped primary")
+	}
+	if !relatedCopySelector(clusterPrimary, identifier, agentName).Matches(labels.Set(clusterLabels)) {
+		t.Errorf("cluster-scoped selector does not match its own labels %v", clusterLabels)
+	}
+}
 
 func TestResolveRelatedResourceObjects(t *testing.T) {
 	// in kcp
