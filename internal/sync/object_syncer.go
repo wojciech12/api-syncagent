@@ -181,6 +181,18 @@ func (s *objectSyncer) Sync(ctx context.Context, log *zap.SugaredLogger, source,
 		return false, nil
 	}
 
+	// Backfill provenance labels/annotations onto copies that predate them: unlike the create, adopt
+	// and Server-Side Apply paths, the client-side-merge update path below never stamps them, so a
+	// copy that already existed when the user opted into a pruning cleanupPolicy would otherwise never
+	// be enumerated for pruning. Requeue after a restamp so the content sync runs on the next pass.
+	restamped, err := s.ensureDestMetadataPersisted(ctx, log, dest)
+	if err != nil {
+		return false, fmt.Errorf("failed to ensure destination metadata: %w", err)
+	}
+	if restamped {
+		return true, nil
+	}
+
 	requeue, err = s.syncObjectContents(ctx, log, source, dest)
 	if err != nil {
 		return false, fmt.Errorf("failed to synchronize object state: %w", err)
@@ -681,4 +693,32 @@ func (s *objectSyncer) ensureDestMetadata(obj *unstructured.Unstructured) {
 	if len(s.destAnnotations) > 0 {
 		ensureAnnotations(obj, s.destAnnotations)
 	}
+}
+
+// ensureDestMetadataPersisted makes sure the additional destination labels/annotations are present
+// on an already-existing destination object, patching it if they are missing. New copies are stamped
+// at creation time (ensureDestinationObject) or when adopted, and the Server-Side Apply path restamps
+// on every apply, but the client-side-merge update path (syncObjectSpec) does not touch them. Without
+// this, a copy that already existed when the user opted into a pruning cleanupPolicy would never
+// receive the provenance labels the prune relies on and could therefore never be reclaimed. The
+// operation is idempotent: once the labels are present, the diff is empty and no patch is issued.
+func (s *objectSyncer) ensureDestMetadataPersisted(ctx context.Context, log *zap.SugaredLogger, dest syncSide) (updated bool, err error) {
+	if len(s.destLabels) == 0 && len(s.destAnnotations) == 0 {
+		return false, nil
+	}
+
+	original := dest.object.DeepCopy()
+	s.ensureDestMetadata(dest.object)
+
+	if equality.Semantic.DeepEqual(original.GetLabels(), dest.object.GetLabels()) &&
+		equality.Semantic.DeepEqual(original.GetAnnotations(), dest.object.GetAnnotations()) {
+		return false, nil
+	}
+
+	log.Debugw("Restamping provenance metadata on existing destination object…", "dest-object", newObjectKey(dest.object, dest.clusterName, logicalcluster.None))
+	if err := dest.client.Patch(ctx, dest.object, ctrlruntimeclient.MergeFrom(original)); err != nil {
+		return false, fmt.Errorf("failed to restamp destination metadata: %w", err)
+	}
+
+	return true, nil
 }
