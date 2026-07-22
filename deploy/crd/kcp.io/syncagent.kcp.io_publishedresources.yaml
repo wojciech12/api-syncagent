@@ -417,7 +417,13 @@ spec:
                           Identifier is a unique name for this related resource. The name must be unique within one
                           PublishedResource and is the key by which consumers (end users) can identify and consume the
                           related resource. Common names are "connection-details" or "credentials".
-                          The identifier must be an alphanumeric string.
+
+                          The identifier is used verbatim as a label value on the synced copies of the related resource,
+                          so it must be a valid label value: a lowercase RFC 1123 label consisting of lowercase
+                          alphanumeric characters or '-', starting and ending with an alphanumeric character, and at
+                          most 63 characters long.
+                        maxLength: 63
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                         type: string
                       identityHash:
                         description: |-

@@ -17,15 +17,77 @@ limitations under the License.
 package sync
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/kcp-dev/logicalcluster/v3"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1validation "k8s.io/apimachinery/pkg/apis/meta/v1/validation"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/util/validation/field"
+	ctrlruntimeclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func createNewObject(name, namespace string) metav1.Object {
+	obj := &unstructured.Unstructured{}
+	obj.SetName(name)
+	obj.SetNamespace(namespace)
+
+	return obj
+}
+
+// TestRelatedCopyLabelsAreValidLabelSet guards the invariant that lets relatedCopyLabels use the
+// related-resource identifier verbatim as a label value: as long as the identifier stays within the
+// bounds the CRD enforces (a lowercase RFC 1123 label of at most 63 characters), the resulting
+// provenance label set must always be accepted by the API server. Otherwise the apply/create of the
+// copy fails and sync silently breaks for that related resource.
+func TestRelatedCopyLabelsAreValidLabelSet(t *testing.T) {
+	// Names and namespaces are hashed, so they can be arbitrarily long/invalid; use overlong ones to
+	// make sure the hashing keeps the label set valid.
+	longName := strings.Repeat("a", 300)
+
+	// maxIdentifier is the longest identifier the CRD accepts (63 chars, matching the pattern).
+	maxIdentifier := "a" + strings.Repeat("b", 61) + "c"
+
+	testcases := []struct {
+		name       string
+		primary    ctrlruntimeclient.Object
+		identifier string
+		agentName  string
+	}{
+		{
+			name:       "typical namespaced primary",
+			primary:    createNewUnstructured("my-primary", "kube-system"),
+			identifier: "connection-details",
+			agentName:  "agent-1",
+		},
+		{
+			name:       "max-length identifier and overlong name/namespace",
+			primary:    createNewUnstructured(longName, longName),
+			identifier: maxIdentifier,
+			agentName:  "",
+		},
+		{
+			name:       "cluster-scoped primary without agent name",
+			primary:    createNewUnstructured(longName, ""),
+			identifier: "credentials",
+			agentName:  "",
+		},
+	}
+
+	for _, testcase := range testcases {
+		t.Run(testcase.name, func(t *testing.T) {
+			set := relatedCopyLabels(testcase.primary, testcase.identifier, testcase.agentName)
+
+			if errs := metav1validation.ValidateLabels(set, field.NewPath("metadata", "labels")); len(errs) > 0 {
+				t.Fatalf("relatedCopyLabels produced an invalid label set: %v", errs)
+			}
+		})
+	}
+}
+
+func createNewUnstructured(name, namespace string) ctrlruntimeclient.Object {
 	obj := &unstructured.Unstructured{}
 	obj.SetName(name)
 	obj.SetNamespace(namespace)

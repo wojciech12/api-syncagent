@@ -163,7 +163,8 @@ func (k objectKey) Annotations() labels.Set {
 // They tie the copy to its owning primary object and the related resource identifier so that all
 // copies of a given (primary, identifier) can be enumerated via relatedCopySelector. Names and
 // namespaces are hashed because they can exceed the label value limit or contain invalid
-// characters; the identifier is validated to be alphanumeric by the API, so it is used verbatim.
+// characters; the identifier is constrained by the API to a valid label value (a lowercase RFC 1123
+// label of at most 63 characters), so it is used verbatim.
 // The agent name (when set) is included so that each agent only ever prunes its own copies.
 func relatedCopyLabels(primary ctrlruntimeclient.Object, identifier, agentName string) map[string]string {
 	set := map[string]string{
