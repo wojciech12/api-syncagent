@@ -273,12 +273,22 @@ func TestValidateRelatedResourceSpec(t *testing.T) {
 			crdName := strings.ToLower(tt.name)
 			crdName = alphaNum.ReplaceAllLiteralString(crdName, "-")
 
+			spec := tt.spec
+
+			// Identifier is required and validated as a label value. None of these cases exercise
+			// identifier validation itself, so give them a valid identifier unless they set their
+			// own; otherwise the identifier pattern would reject the spec before the rule actually
+			// under test is reached.
+			if spec.Identifier == "" {
+				spec.Identifier = "test-identifier"
+			}
+
 			pubRes := &syncagentv1alpha1.PublishedResource{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "test-" + crdName,
 				},
 				Spec: syncagentv1alpha1.PublishedResourceSpec{
-					Related: []syncagentv1alpha1.RelatedResourceSpec{tt.spec},
+					Related: []syncagentv1alpha1.RelatedResourceSpec{spec},
 				},
 			}
 
