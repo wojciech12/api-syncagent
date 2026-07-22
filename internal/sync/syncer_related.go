@@ -112,7 +112,7 @@ func (s *ResourceSyncer) processRelatedResource(ctx context.Context, log *zap.Su
 	// onto every copy so that all copies of this (primary, identifier) can be enumerated later to
 	// prune stale copies or tear them all down.
 	primary := remote.object
-	destLabels := relatedCopyLabels(primary, relRes.Identifier, s.agentName)
+	destLabels := relatedCopyLabels(primary, remote.clusterName, s.pubRes.Name, relRes.Identifier, s.agentName)
 	destAnnotations := relatedCopyAnnotations(primary)
 
 	// remember which destination copies we (re)synced this pass, so a MatchOrigin prune can delete
@@ -234,7 +234,7 @@ func (s *ResourceSyncer) processRelatedResource(ctx context.Context, log *zap.Su
 		// On primary teardown, delete ALL labelled copies. This is a superset of the per-object
 		// deletion performed in the loop above and additionally reclaims copies whose origin object
 		// had already disappeared mid-life (which the loop can no longer resolve).
-		selector := relatedCopySelector(primary, relRes.Identifier, s.agentName)
+		selector := relatedCopySelector(primary, remote.clusterName, s.pubRes.Name, relRes.Identifier, s.agentName)
 
 		pruneRequeue, err := s.pruneRelatedCopies(ctx, log, dest, primary, projectedGVK, selector, nil, true)
 		if err != nil {
@@ -246,7 +246,7 @@ func (s *ResourceSyncer) processRelatedResource(ctx context.Context, log *zap.Su
 	case !primaryDeleting && policy == syncagentv1alpha1.RelatedResourceCleanupPolicyMatchOrigin:
 		// Keep the destination set equal to the origin set: prune every labelled copy whose origin
 		// object was not resolved this pass.
-		selector := relatedCopySelector(primary, relRes.Identifier, s.agentName)
+		selector := relatedCopySelector(primary, remote.clusterName, s.pubRes.Name, relRes.Identifier, s.agentName)
 
 		pruneRequeue, err := s.pruneRelatedCopies(ctx, log, dest, primary, projectedGVK, selector, synced, false)
 		if err != nil {

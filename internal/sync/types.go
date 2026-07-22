@@ -58,13 +58,19 @@ const (
 	// to link them back to their owning primary object and the related resource identifier.
 	// They allow the agent to List all copies belonging to a specific primary + identifier so
 	// that it can prune copies whose origin object no longer exists (cleanupPolicy: MatchOrigin)
-	// or delete all copies on primary teardown. Names/namespaces can exceed the 63-character
-	// label limit or contain invalid characters, so they are hashed; the plaintext values are
-	// kept as annotations for humans.
+	// or delete all copies on primary teardown. Together they must uniquely identify the owning
+	// primary, otherwise one primary's prune selector could match (and delete) another's copies:
+	// the destination is shared across all kcp workspaces (so the primary's logical cluster is
+	// included) and across all PublishedResources (so the owning PublishedResource is included).
+	// Names/namespaces and the PublishedResource name can exceed the 63-character label limit or
+	// contain invalid characters, so they are hashed; the plaintext values are kept as annotations
+	// for humans.
 
-	relatedPrimaryNamespaceHashLabel = "syncagent.kcp.io/related-primary-namespace-hash"
-	relatedPrimaryNameHashLabel      = "syncagent.kcp.io/related-primary-name-hash"
-	relatedIdentifierLabel           = "syncagent.kcp.io/related-identifier"
+	relatedPrimaryClusterLabel        = "syncagent.kcp.io/related-primary-cluster"
+	relatedPublishedResourceHashLabel = "syncagent.kcp.io/related-published-resource-hash"
+	relatedPrimaryNamespaceHashLabel  = "syncagent.kcp.io/related-primary-namespace-hash"
+	relatedPrimaryNameHashLabel       = "syncagent.kcp.io/related-primary-name-hash"
+	relatedIdentifierLabel            = "syncagent.kcp.io/related-identifier"
 
 	relatedPrimaryNamespaceAnnotation = "syncagent.kcp.io/related-primary-namespace"
 	relatedPrimaryNameAnnotation      = "syncagent.kcp.io/related-primary-name"

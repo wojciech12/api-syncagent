@@ -161,15 +161,21 @@ func (k objectKey) Annotations() labels.Set {
 
 // relatedCopyLabels builds the provenance labels put on a destination copy of a related resource.
 // They tie the copy to its owning primary object and the related resource identifier so that all
-// copies of a given (primary, identifier) can be enumerated via relatedCopySelector. Names and
-// namespaces are hashed because they can exceed the label value limit or contain invalid
-// characters; the identifier is constrained by the API to a valid label value (a lowercase RFC 1123
-// label of at most 63 characters), so it is used verbatim.
-// The agent name (when set) is included so that each agent only ever prunes its own copies.
-func relatedCopyLabels(primary ctrlruntimeclient.Object, identifier, agentName string) map[string]string {
+// copies of a given (primary, identifier) can be enumerated via relatedCopySelector. The set must
+// uniquely identify the owning primary, because the prune List is cluster-wide on the shared
+// destination: the primary's logical cluster (workspace) and the owning PublishedResource are
+// therefore included, in addition to the primary's name/namespace. Names, namespaces and the
+// PublishedResource name are hashed because they can exceed the label value limit or contain invalid
+// characters; the cluster name is already a valid label value and the identifier is constrained by
+// the API to a valid label value (a lowercase RFC 1123 label of at most 63 characters), so both are
+// used verbatim. The agent name (when set) is included so that each agent only ever prunes its own
+// copies.
+func relatedCopyLabels(primary ctrlruntimeclient.Object, clusterName logicalcluster.Name, publishedResourceName, identifier, agentName string) map[string]string {
 	set := map[string]string{
-		relatedPrimaryNameHashLabel: crypto.Hash(primary.GetName()),
-		relatedIdentifierLabel:      identifier,
+		relatedPrimaryClusterLabel:        string(clusterName),
+		relatedPublishedResourceHashLabel: crypto.Hash(publishedResourceName),
+		relatedPrimaryNameHashLabel:       crypto.Hash(primary.GetName()),
+		relatedIdentifierLabel:            identifier,
 	}
 
 	if namespace := primary.GetNamespace(); namespace != "" {
@@ -201,6 +207,6 @@ func relatedCopyAnnotations(primary ctrlruntimeclient.Object) map[string]string 
 // the given primary object and related resource identifier (scoped to the agent when set). Because
 // it mirrors relatedCopyLabels, only objects the agent itself labelled are ever selected, so
 // hand-created objects are never in scope for pruning.
-func relatedCopySelector(primary ctrlruntimeclient.Object, identifier, agentName string) labels.Selector {
-	return labels.SelectorFromSet(relatedCopyLabels(primary, identifier, agentName))
+func relatedCopySelector(primary ctrlruntimeclient.Object, clusterName logicalcluster.Name, publishedResourceName, identifier, agentName string) labels.Selector {
+	return labels.SelectorFromSet(relatedCopyLabels(primary, clusterName, publishedResourceName, identifier, agentName))
 }
