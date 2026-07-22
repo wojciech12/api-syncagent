@@ -211,7 +211,8 @@ func (s *ResourceSyncer) processRelatedResource(ctx context.Context, log *zap.Su
 	}
 
 	// Remember the related objects on the primary object for the end-user. This is rebuilt from the
-	// freshly-resolved set so stale entries for pruned objects do not linger.
+	// freshly-resolved set so entries for objects that no longer resolve are dropped; a fully-empty
+	// resolution is left untouched (see rememberRelatedObjects) to avoid churning the primary.
 	if relRes.Origin == syncagentv1alpha1.RelatedResourceOriginService {
 		annRequeue, err := s.rememberRelatedObjects(ctx, log, remote, relRes.Identifier, resolvedObjects)
 		if err != nil {
@@ -266,9 +267,19 @@ func relatedCopyKey(namespace, name string) string {
 
 // rememberRelatedObjects writes the human-facing provenance annotations onto the primary object,
 // one per related copy (indexed). It rebuilds the full set for the given identifier from the
-// currently resolved objects, so annotations for pruned copies are removed and do not accumulate.
-// It reports requeue=true when it patched the primary object.
+// currently resolved objects, so annotations for objects that are no longer resolved are removed and
+// do not accumulate. It reports requeue=true when it patched the primary object.
 func (s *ResourceSyncer) rememberRelatedObjects(ctx context.Context, log *zap.SugaredLogger, remote syncSide, identifier string, resolvedObjects []resolvedObject) (requeue bool, err error) {
+	// When nothing resolves there is nothing new to remember, and we deliberately do not treat this
+	// as "clear all annotations for this identifier". These annotations are purely informational and
+	// the prune is the authoritative cleanup for the copies themselves; wiping them on every empty
+	// pass would otherwise churn the primary object with patches and requeues for all cleanup
+	// policies, not just the pruning ones (this used to be avoided by an early return before the
+	// resolved set was allowed to be empty so the prune could run).
+	if len(resolvedObjects) == 0 {
+		return false, nil
+	}
+
 	// TODO: Improve this logic, the added index is just a hack until we find a better solution to
 	// let the user know about the related object (this annotation is not relevant for the syncing
 	// logic, it's purely for the end-user).

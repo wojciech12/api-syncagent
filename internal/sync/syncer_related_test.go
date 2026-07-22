@@ -19,6 +19,8 @@ package sync
 import (
 	"testing"
 
+	"go.uber.org/zap"
+
 	dummyv1alpha1 "github.com/kcp-dev/api-syncagent/internal/sync/apis/dummy/v1alpha1"
 	syncagentv1alpha1 "github.com/kcp-dev/api-syncagent/sdk/apis/syncagent/v1alpha1"
 
@@ -28,6 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	ctrlruntimeclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func TestEffectiveCleanupPolicy(t *testing.T) {
@@ -147,6 +150,54 @@ func TestRelatedCopyLabelsSelectorRoundTrip(t *testing.T) {
 	}
 	if !relatedCopySelector(clusterPrimary, clusterName, publishedRes, identifier, agentName).Matches(labels.Set(clusterLabels)) {
 		t.Errorf("cluster-scoped selector does not match its own labels %v", clusterLabels)
+	}
+}
+
+func TestRememberRelatedObjectsSkipsEmptyResolution(t *testing.T) {
+	const identifier = "credentials"
+
+	relatedAnnotation := relatedObjectAnnotationPrefix + identifier + ".0"
+
+	// A primary that already carries a related-object annotation for this identifier (from a previous
+	// pass) plus an unrelated annotation that must never be touched.
+	primary := newUnstructured(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-primary",
+			Namespace: "default",
+			Annotations: map[string]string{
+				relatedAnnotation:  `{"name":"secret-copy","namespace":"default","apiVersion":"v1","kind":"Secret"}`,
+				"example.com/keep": "yes",
+			},
+		},
+	})
+
+	client := buildFakeClient(primary)
+	remote := syncSide{object: primary.DeepCopy(), client: client}
+
+	s := &ResourceSyncer{}
+
+	// With an empty resolved set, the informational annotations must be left untouched: no patch, no
+	// requeue. Wiping them here would churn the primary object for every cleanup policy, not just the
+	// pruning ones (the prune below is the authoritative cleanup for the copies themselves).
+	requeue, err := s.rememberRelatedObjects(t.Context(), zap.NewNop().Sugar(), remote, identifier, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if requeue {
+		t.Error("expected requeue=false for an empty resolution, but got true")
+	}
+
+	persisted := &unstructured.Unstructured{}
+	persisted.SetGroupVersionKind(primary.GroupVersionKind())
+	if err := client.Get(t.Context(), ctrlruntimeclient.ObjectKeyFromObject(primary), persisted); err != nil {
+		t.Fatalf("failed to get persisted object: %v", err)
+	}
+
+	if got := persisted.GetAnnotations()[relatedAnnotation]; got == "" {
+		t.Error("expected the pre-existing related-object annotation to be preserved, but it was wiped")
+	}
+	if got := persisted.GetAnnotations()["example.com/keep"]; got != "yes" {
+		t.Errorf("unrelated annotation must be preserved, got %q", got)
 	}
 }
 
