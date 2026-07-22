@@ -249,6 +249,40 @@ func (s *ResourceSyncer) processRelatedResource(ctx context.Context, log *zap.Su
 		// object was not resolved this pass.
 		selector := relatedCopySelector(primary, remote.clusterName, s.pubRes.Name, relRes.Identifier, s.agentName)
 
+		// A fully-empty resolution here would prune *every* copy at once, because the keep set is
+		// empty. resolvedObjects comes from a cache-backed read, and a relisting or otherwise stale
+		// informer -- notably a kcp virtual-workspace cache -- can momentarily return nothing even
+		// though the origin objects still exist. Acting on that would delete and then immediately
+		// recreate all copies, disrupting consumers (e.g. Secrets mounted by workloads). The
+		// non-destructive annotation bookkeeping already refuses to act on an empty resolution for
+		// the same reason (see rememberRelatedObjects); the destructive prune must be at least as
+		// careful. Before deleting the whole set, re-confirm the emptiness against a live read; if
+		// the live read disagrees, requeue and let the cache converge. A genuinely empty origin is
+		// still pruned, so the single-object mid-life case the feature promises keeps working.
+		//
+		// Partial under-resolution (a non-empty but incomplete set) is intentionally not guarded:
+		// it prunes at most a subset and self-heals on the next pass, matching the cache semantics
+		// the rest of the sync already relies on.
+		if len(resolvedObjects) == 0 {
+			confirmedEmpty, checked, err := s.confirmOriginEmpty(ctx, origin, dest, relRes)
+			if err != nil {
+				return false, fmt.Errorf("failed to confirm empty origin before pruning related copies: %w", err)
+			}
+
+			switch {
+			case !checked:
+				// No live reader configured to confirm against (e.g. in unit tests). Do not risk
+				// deleting the whole set on an unverified empty resolution; teardown still reclaims
+				// the copies if the primary is ever deleted.
+				log.Debug("Skipping full related-copy prune on empty resolution: no live reader configured to confirm it.")
+				return requeue, nil
+
+			case !confirmedEmpty:
+				log.Warn("Skipping related-copy prune: origin resolved to no objects from cache, but a live read still sees origin objects; requeueing to let the cache converge.")
+				return true, nil
+			}
+		}
+
 		pruneRequeue, err := s.pruneRelatedCopies(ctx, log, dest, primary, projectedGVK, selector, synced, false)
 		if err != nil {
 			return false, fmt.Errorf("failed to prune related copies: %w", err)
@@ -403,6 +437,54 @@ func (s *ResourceSyncer) pruneRelatedCopies(ctx context.Context, log *zap.Sugare
 	}
 
 	return requeue, nil
+}
+
+// liveReadClient serves reads from an uncached reader (hitting the API server directly) while
+// borrowing the RESTMapper, scheme and everything else from an underlying cached client. It lets a
+// destructive prune re-run the origin resolution against the API server instead of trusting a
+// possibly-stale informer cache, without duplicating the resolution logic.
+type liveReadClient struct {
+	ctrlruntimeclient.Client
+	reader ctrlruntimeclient.Reader
+}
+
+func (c *liveReadClient) Get(ctx context.Context, key ctrlruntimeclient.ObjectKey, obj ctrlruntimeclient.Object, opts ...ctrlruntimeclient.GetOption) error {
+	return c.reader.Get(ctx, key, obj, opts...)
+}
+
+func (c *liveReadClient) List(ctx context.Context, list ctrlruntimeclient.ObjectList, opts ...ctrlruntimeclient.ListOption) error {
+	return c.reader.List(ctx, list, opts...)
+}
+
+// confirmOriginEmpty re-runs the origin resolution against a live (uncached) reader to double-check
+// a cache-driven empty resolution before a MatchOrigin prune deletes all copies of a related
+// resource. It returns checked=false when no live reader is configured for the origin side, in
+// which case the caller must not treat the emptiness as authoritative. When a reader is configured,
+// confirmedEmpty reports whether the live resolution also yields no objects.
+func (s *ResourceSyncer) confirmOriginEmpty(ctx context.Context, origin, dest syncSide, relRes syncagentv1alpha1.RelatedResourceSpec) (confirmedEmpty bool, checked bool, err error) {
+	var reader ctrlruntimeclient.Reader
+	if relRes.Origin == syncagentv1alpha1.RelatedResourceOriginService {
+		reader = s.localAPIReader
+	} else {
+		reader = s.remoteAPIReader
+	}
+
+	if reader == nil {
+		return false, false, nil
+	}
+
+	liveOrigin := syncSide{
+		clusterName: origin.clusterName,
+		client:      &liveReadClient{Client: origin.client, reader: reader},
+		object:      origin.object,
+	}
+
+	resolved, err := resolveRelatedResourceObjects(ctx, liveOrigin, dest, relRes)
+	if err != nil {
+		return false, true, err
+	}
+
+	return len(resolved) == 0, true, nil
 }
 
 // resolvedObject is the result of following the configuration of a related resources. It contains

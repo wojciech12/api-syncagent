@@ -340,6 +340,103 @@ func TestPruneRelatedCopies(t *testing.T) {
 	})
 }
 
+// TestConfirmOriginEmpty guards the safety check that prevents a MatchOrigin prune from deleting
+// every related copy on a merely-transiently-empty resolution: the primary's cache-backed origin
+// read can momentarily return nothing (relisting/stale informer) even though the origin objects
+// still exist. confirmOriginEmpty re-runs the resolution against a live reader to distinguish a
+// genuine empty origin (prune) from a stale one (skip + requeue).
+func TestConfirmOriginEmpty(t *testing.T) {
+	// A related Secret found via a label selector in a fixed namespace.
+	relRes := syncagentv1alpha1.RelatedResourceSpec{
+		Identifier: "credentials",
+		Origin:     syncagentv1alpha1.RelatedResourceOriginService,
+		Kind:       "Secret",
+		Object: syncagentv1alpha1.RelatedResourceObject{
+			RelatedResourceObjectSpec: syncagentv1alpha1.RelatedResourceObjectSpec{
+				Selector: &syncagentv1alpha1.RelatedResourceObjectSelector{
+					LabelSelector: metav1.LabelSelector{
+						MatchLabels: map[string]string{"app": "credentials"},
+					},
+					Rewrite: syncagentv1alpha1.RelatedResourceSelectorRewrite{
+						Template: &syncagentv1alpha1.TemplateExpression{Template: "{{ .Value }}"},
+					},
+				},
+			},
+			// static namespace so resolution never depends on the primary's namespace.
+			Namespace: &syncagentv1alpha1.RelatedResourceObjectSpec{
+				Template: &syncagentv1alpha1.TemplateExpression{Template: "dummy-namespace"},
+			},
+		},
+	}
+
+	// origin: service, so origin = local (service cluster), dest = remote (kcp).
+	originPrimary := &unstructured.Unstructured{}
+	originPrimary.SetName("my-primary")
+	destPrimary := &unstructured.Unstructured{}
+	destPrimary.SetName("my-primary")
+
+	credSecret := newUnstructured(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "dummy-namespace",
+			Name:      "cred-1",
+			Labels:    map[string]string{"app": "credentials"},
+		},
+	})
+
+	// The origin-side cached client is EMPTY: this simulates the reconcile seeing a stale/relisting
+	// cache that returns no objects even though the origin Secret still exists.
+	origin := syncSide{client: buildFakeClient(), object: originPrimary}
+	dest := syncSide{client: buildFakeClient(), object: destPrimary}
+
+	t.Run("no live reader configured is reported as not-checked", func(t *testing.T) {
+		s := &ResourceSyncer{}
+
+		empty, checked, err := s.confirmOriginEmpty(t.Context(), origin, dest, relRes)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if checked {
+			t.Error("expected checked=false when no live reader is configured")
+		}
+		if empty {
+			t.Error("expected empty=false (unverified) when no live reader is configured")
+		}
+	})
+
+	t.Run("live read still sees origin objects: not confirmed empty", func(t *testing.T) {
+		// The live reader sees the Secret the stale cache missed, so the destructive prune must be
+		// held back.
+		s := &ResourceSyncer{localAPIReader: buildFakeClient(credSecret)}
+
+		empty, checked, err := s.confirmOriginEmpty(t.Context(), origin, dest, relRes)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !checked {
+			t.Fatal("expected checked=true when a live reader is configured")
+		}
+		if empty {
+			t.Error("expected confirmedEmpty=false because the live read still sees the origin Secret")
+		}
+	})
+
+	t.Run("live read also empty: confirmed empty", func(t *testing.T) {
+		// Both the cache and the live read agree there is nothing, so the prune may proceed.
+		s := &ResourceSyncer{localAPIReader: buildFakeClient()}
+
+		empty, checked, err := s.confirmOriginEmpty(t.Context(), origin, dest, relRes)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !checked {
+			t.Fatal("expected checked=true when a live reader is configured")
+		}
+		if !empty {
+			t.Error("expected confirmedEmpty=true because the live read also finds no origin objects")
+		}
+	})
+}
+
 func TestResolveRelatedResourceObjects(t *testing.T) {
 	// in kcp
 	primaryObject := newUnstructured(&dummyv1alpha1.Thing{
