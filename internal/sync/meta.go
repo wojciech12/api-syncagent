@@ -18,6 +18,7 @@ package sync
 
 import (
 	"context"
+	"strings"
 
 	"go.uber.org/zap"
 
@@ -161,25 +162,18 @@ func (k objectKey) Annotations() labels.Set {
 
 // relatedCopyLabels builds the provenance labels put on a destination copy of a related resource.
 // They tie the copy to its owning primary object and the related resource identifier so that all
-// copies of a given (primary, identifier) can be enumerated via relatedCopySelector. The set must
-// uniquely identify the owning primary, because the prune List is cluster-wide on the shared
-// destination: the primary's logical cluster (workspace) and the owning PublishedResource are
-// therefore included, in addition to the primary's name/namespace. Names, namespaces and the
-// PublishedResource name are hashed because they can exceed the label value limit or contain invalid
-// characters; the cluster name is already a valid label value and the identifier is constrained by
-// the API to a valid label value (a lowercase RFC 1123 label of at most 63 characters), so both are
-// used verbatim. The agent name (when set) is included so that each agent only ever prunes its own
-// copies.
+// copies of a given (primary, identifier) can be enumerated via relatedCopySelector. The owner tuple
+// — the primary's logical cluster (workspace), the owning PublishedResource and the primary's
+// namespace/name — is hashed into a single related-owner label; because the prune List is
+// cluster-wide on the shared destination, all of these dimensions must be part of the identity, and
+// folding them into one hash makes that uniqueness inherent in the hash input (and keeps the value a
+// valid label regardless of the source lengths or characters). The identifier is used verbatim (the
+// API constrains it to a valid label value) and the agent name (when set) is included so that each
+// agent only ever prunes its own copies.
 func relatedCopyLabels(primary ctrlruntimeclient.Object, clusterName logicalcluster.Name, publishedResourceName, identifier, agentName string) map[string]string {
 	set := map[string]string{
-		relatedPrimaryClusterLabel:        string(clusterName),
-		relatedPublishedResourceHashLabel: crypto.Hash(publishedResourceName),
-		relatedPrimaryNameHashLabel:       crypto.Hash(primary.GetName()),
-		relatedIdentifierLabel:            identifier,
-	}
-
-	if namespace := primary.GetNamespace(); namespace != "" {
-		set[relatedPrimaryNamespaceHashLabel] = crypto.Hash(namespace)
+		relatedOwnerLabel:      relatedOwnerHash(clusterName, publishedResourceName, primary.GetNamespace(), primary.GetName()),
+		relatedIdentifierLabel: identifier,
 	}
 
 	if agentName != "" {
@@ -187,6 +181,15 @@ func relatedCopyLabels(primary ctrlruntimeclient.Object, clusterName logicalclus
 	}
 
 	return set
+}
+
+// relatedOwnerHash hashes the owner tuple (cluster, PublishedResource, primary namespace, primary
+// name) into a single label value. The NUL separator keeps the dimensions unambiguous, so e.g.
+// cluster "a" + name "bc" cannot collide with cluster "ab" + name "c". A cluster-scoped primary has
+// an empty namespace, which folds in cleanly and cannot collide with a namespaced primary (whose
+// namespace is never empty).
+func relatedOwnerHash(clusterName logicalcluster.Name, publishedResourceName, namespace, name string) string {
+	return crypto.Hash(strings.Join([]string{string(clusterName), publishedResourceName, namespace, name}, "\x00"))
 }
 
 // relatedCopyAnnotations builds the human-facing provenance annotations (plaintext primary

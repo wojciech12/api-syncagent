@@ -142,16 +142,22 @@ func TestRelatedCopyLabelsSelectorRoundTrip(t *testing.T) {
 		t.Errorf("selector for a different published resource unexpectedly matched labels %v", labelSet)
 	}
 
-	// a cluster-scoped primary (no namespace) must omit the namespace-hash label and still
-	// round-trip.
+	// a cluster-scoped primary (no namespace) still produces a valid, round-tripping label set; its
+	// empty namespace folds into the owner hash and cannot collide with a namespaced primary.
 	clusterPrimary := &unstructured.Unstructured{}
 	clusterPrimary.SetName("cluster-primary")
 	clusterLabels := relatedCopyLabels(clusterPrimary, clusterName, publishedRes, identifier, agentName)
-	if _, ok := clusterLabels[relatedPrimaryNamespaceHashLabel]; ok {
-		t.Error("expected no namespace-hash label for a cluster-scoped primary")
+	if _, ok := clusterLabels[relatedOwnerLabel]; !ok {
+		t.Errorf("expected a related-owner label, got %v", clusterLabels)
 	}
 	if !relatedCopySelector(clusterPrimary, clusterName, publishedRes, identifier, agentName).Matches(labels.Set(clusterLabels)) {
 		t.Errorf("cluster-scoped selector does not match its own labels %v", clusterLabels)
+	}
+
+	// the provenance is exactly the three labels (owner + identifier + agent); the four separate
+	// cluster/PublishedResource/name/namespace labels were collapsed into the single owner hash.
+	if len(labelSet) != 3 {
+		t.Errorf("expected exactly 3 provenance labels (owner, identifier, agent), got %d: %v", len(labelSet), labelSet)
 	}
 }
 

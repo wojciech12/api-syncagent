@@ -236,8 +236,8 @@ func TestEnsureDestMetadataPersisted(t *testing.T) {
 	}
 
 	destLabels := map[string]string{
-		relatedPrimaryClusterLabel: "testcluster",
-		relatedIdentifierLabel:     "credentials",
+		relatedOwnerLabel:      "testcluster",
+		relatedIdentifierLabel: "credentials",
 	}
 	destAnnotations := map[string]string{
 		relatedPrimaryNameAnnotation: "my-primary",
