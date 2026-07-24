@@ -593,6 +593,7 @@ related resource this means a `watch` must be configured, otherwise a deleted so
 only be noticed on the next incidental reconcile of the primary. The CRD enforces this: setting
 `cleanupPolicy: MatchOrigin` together with `origin: service` requires a `watch` block.
 
+{% raw %}
 ```yaml
 apiVersion: syncagent.kcp.io/v1alpha1
 kind: PublishedResource
@@ -620,6 +621,7 @@ spec:
           matchLabels:
             example.com/managed: "true"
 ```
+{% endraw %}
 
 !!! note
     The deprecated boolean `cleanup` field still works for backwards compatibility. When
